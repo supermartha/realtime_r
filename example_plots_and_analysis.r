@@ -58,21 +58,13 @@ ing_guises <- data.frame(token_num=token_num, stimulus=stimulus, time=token_time
 # Check our work to make sure the dataframe looks right and guises are specified correctly
 ing_guises
 
-
-#### NEXT STEPS:
-### - add error in code if wrong number of tokens, bad colnames for stimuli, etc.
-### and make slope plots
-### add example models
-### fix rounding factor to be consistent with prep file
-### see notes in typo_testing.r
-
 source('slope_functions.r')
 
 ingSlopes <- calculateSlopes(dataframe=results, token_guise_dataframe=ing_guises, roundingFactor=2)
 ### dataframe = the dataframe
 #### n = how many seconds after token to calculate slopes for, if calculateEachNSeconds==TRUE
 ### calculate each n seconds: if TRUE, calculate slopes for N seconds after each token; if FALSE, calculate token-to-token slopes
-# roundingFactor = 1 for rounded to nearest second, 2 for rounded to nearest .5 second, 4 for nearest .25 second, etc. (This MUST match the data, or else you will get an error)
+# roundingFactor = 1 for rounded to nearest second, 2 for rounded to nearest .5 second, 4 for nearest .25 second, etc. (This MUST match the data, or else you will get an error. NB this is different than roundTo specified in prep_web_data.r)
 
 ########################################
 ####### SLOPES: PLOTS #############
@@ -114,11 +106,11 @@ makeSlopesSummaryPlot(ingSlopes, groupingFactor="stimulusType")
 # (in the sample data there are only three types of education)
 makeSlopesSummaryPlot(ingSlopes, groupingFactor="degree", main="Education Level of Participant")
 # (To make these labels fancier, you could create a new column with fancy names and then group by that, e.g.:)
-# ingSlopes$fancyDegree <- 'Masters Degree'
-# ingSlopes[ingSlopes$degree=='some_college',]$fancyDegree <- 'Some College'
-# ingSlopes[ingSlopes$degree=='some_hs',]$fancyDegree <- 'Some High School'
-# makeSlopesSummaryPlot(ingSlopes, groupingFactor="fancyDegree", main="Education Level of Participant")
-# makeSlopesSummaryPlot(ingSlopes, groupingFactor="fancyDegree", main="Education Level of Participant", groupingLabelCex=.8) # (label text is too big on my screen, so make it smaller)
+ingSlopes$fancyDegree <- 'Masters Degree'
+ingSlopes[ingSlopes$degree=='some_college',]$fancyDegree <- 'Some College'
+ingSlopes[ingSlopes$degree=='some_hs',]$fancyDegree <- 'Some High School'
+makeSlopesSummaryPlot(ingSlopes, groupingFactor="fancyDegree", main="Education Level of Participant")
+makeSlopesSummaryPlot(ingSlopes, groupingFactor="fancyDegree", main="Education Level of Participant", groupingLabelCex=.8) # (label text is too big on my screen, so make it smaller)
 
 ########################################
 ####### SLOPES: MODELS #################
@@ -145,7 +137,7 @@ ingSlopes$audioSegment <- paste(ingSlopes$order, ingSlopes$tokenNum)
 # Basic model including a random intercept for participant and audio segment
 guiseModel <- lmer(slope ~ guise + (1|participant) + (1|audioSegment), dat=ingSlopes)
 summary(guiseModel)
-# No effect, which is reassuring because we this data up
+# No effect, which is reassuring because we made this data up
 
 # Test demographic factors, e.g. do more educated participants react more strongly to (ING)
 # because they are judgier?
@@ -153,15 +145,67 @@ guiseEducationModel <- lmer(slope ~ guise*degree + (1|participant) + (1|audioSeg
 summary(guiseEducationModel)
 
 
-#### TO DO: POSTHOC MODELS
-### & functions for removing first 5 sec etc. (make optional)
-#####################################################
-####### MODELS OF POSTHOC RATINGS #################
-###################################################
-
+#####################################################################
+####### MODELS OF POSTHOC (AFTER-THE-FACT) RATINGS #################
+###################################################################
 ### Summarize by participant, to have a dataframe with just one posthoc rating per participant
-by_participant <- ddply(results, ~ participant + stimulus, summarize, posthoc=unique(posthoc))
+by_participant <- ddply(results, ~ participant + stimulus, summarize, posthoc=unique(posthoc), minRating=min(rating), maxRating=max(rating), finalRating=tail(rating, 1), meanRating=mean(rating), medianRating=median(rating), veryFinalRating=unique(veryFinalRating))
 head(by_participant)
 
+# Investigate whether there were significant differences in posthoc ratings 
 posthocModel <- lm(posthoc ~ stimulus, dat=by_participant)
 summary(posthocModel)
+
+### Analyze how well in-the-moment ratings (e.g. mean in-the-moment rating) predict posthoc ratings.s
+### In our paper, we only looked at measurements starting 5 seconds after a participant first started moving the slider, to remove effects of the slider starting at 50 points.
+excludeFirstMovements <- function(dataframe, secsToExclude=5) {
+  ## Function that takes a dataframe. For each participant:
+  ## figure out when they first started moving the slider
+  ## add secsToExclude to that
+  ## drop rows of dataframe where the current time is 
+  ## less than when they first started moving + secsToExclude
+  participantCount <- 0
+  for (participant in unique(dataframe$participant)) {
+    temp <- dataframe[dataframe$participant==participant,]
+    temp <- temp[order(temp$roundedTime),]
+    if (length(unique(temp$rating)) == 1) {
+      # People who never moved the slider at all
+      temp$minTime <- NA
+      temp$toInclude <- FALSE}
+    else {
+      minTimeIndex <- min(which(temp$rating != 50))
+      minTime <- temp[minTimeIndex,]$roundedTime
+      temp$minTime <- minTime + secsToExclude
+      temp$toInclude <- temp$roundedTime > temp$minTime
+    }
+    if (participantCount==0) {
+      # Initialize new dataframe
+      resData <- temp
+    }
+    else {resData <- rbind(resData, temp)}
+    participantCount <- participantCount + 1
+  }
+  resData <- resData[resData$toInclude==TRUE,]
+  return(resData)
+}
+
+newResults <- excludeFirstMovements(results)
+
+by_participant_noFirst5 <- ddply(newResults, ~ participant + stimulus, summarize, posthoc=unique(posthoc), minRating=min(rating), maxRating=max(rating), finalRating=tail(rating, 1), meanRating=mean(rating), medianRating=median(rating), veryFinalRating=unique(veryFinalRating))
+
+# Build models with each of these factors
+model1 <- lm(posthoc ~ meanRating, dat=by_participant_noFirst5)
+model2 <- lm(posthoc ~ minRating, dat=by_participant_noFirst5)
+model3 <- lm(posthoc ~ maxRating, dat=by_participant_noFirst5)
+model4 <- lm(posthoc ~ medianRating, dat=by_participant_noFirst5)
+model5 <- lm(posthoc ~ finalRating, dat=by_participant_noFirst5)
+model6 <- lm(posthoc ~ veryFinalRating, dat=by_participant_noFirst5)
+# Since these data were randomly generated, there's no relationship
+# but in all of our experiments with actual data we found highly 
+# significant relationships, esp. between meanRating and posthoc!
+summary(model1)
+summary(model2)
+summary(model3)
+summary(model4)
+summary(model5)
+summary(model6)

@@ -1,11 +1,6 @@
 library('reshape2')
 library('plyr')
 
-##### TO DO:
-### remove need to use marthaTools (just put getNthElement in here)
-
-# source('slider_global_variables.r')
-
 #####
 #####
 ##### Get slopes of n seconds after each token ######
